@@ -80,6 +80,7 @@ void ParticleFilter::prediction(double delta_t, double std_pos[], double velocit
 	normal_distribution<double> dist_y(0, std_x);
 	normal_distribution<double> dist_yaw(0, std_yaw);
 
+	// predict particles for the next time stamp, considering the observation variances.
 	for (int i = 0; i < num_particles; ++i){
 
 		double noise_x, noise_y, noise_yaw;
@@ -156,88 +157,63 @@ void ParticleFilter::updateWeights(double sensor_range, double std_landmark[],
 	//   3.33
 	//   http://planning.cs.uiuc.edu/node99.html
 
-	float p_x, p_y, p_theta, l_x, l_y;
-	int l_id;
 
-	// for each particle
+	// Interate over every particle
 	for (int i = 0; i < particles.size(); i++){
-		p_x = particles[i].x;
-		p_y = particles[i].y;
-		p_theta = particles[i].theta;
+		double p_x = particles[i].x;
+		double p_y = particles[i].y;
+		double p_theta = particles[i].theta;
+		double weight = 1.0;
 
-		vector<LandmarkObs> predicted; 
-		for (int j = 0; j < map_landmarks.landmark_list.size(); j++){
-			l_id = map_landmarks.landmark_list[j].id_i;
-			l_x = map_landmarks.landmark_list[j].x_f;
-			l_y = map_landmarks.landmark_list[j].y_f;
+		// for each observation, transform from car coordinate to map coordinate.
+		for (int j = 0; j < observations.size(); j++){
+			LandmarkObs obs = observations[j];
+			double obs_x = obs.x;
+			double obs_y = obs.y;
 
-			if (dist(p_x, p_y, l_x, l_y) <= sensor_range){
-				LandmarkObs pred;
-				pred.x = l_x;
-				pred.y = l_y;
-				pred.id = l_id;
-				// cout << "Predicted landmark x: " << l_x << endl;
-				// cout << "Predicted landmark y: " << l_y << endl;
-				// cout << "Predicted landmark id: " << l_id << endl;
-				predicted.push_back(pred);
-			}
-		}
+			double pred_x = obs_x * cos(p_theta) - obs_y * sin(p_theta) + p_x;
+			double pred_y = obs_x * sin(p_theta) + obs_y * cos(p_theta) + p_y;
 
-		std::vector<LandmarkObs> transformed_obs;
-		for (int j = 0; j < observations.size(); j ++){
-			double x_t = cos(p_theta)*observations[j].x - sin(p_theta)*observations[j].y + p_x;
-			double y_t = sin(p_theta)*observations[j].x + cos(p_theta)*observations[j].y + p_y;
-			LandmarkObs obs;
-			obs.id = observations[j].id;
-			obs.x = x_t;
-			obs.y = y_t;
-			transformed_obs.push_back(obs);
-		}
+			// Iterate over all the landmarks and find the shortest distance landmark from this observation
+			double shortest_dist = sensor_range;
+			double land_x;
+			double land_y;
 
-		dataAssociation(predicted, transformed_obs);
 
-		// initialize weight
-		long double weight = 1.0;
+			for (int k = 0; k < map_landmarks.landmark_list.size(); k++){
+				double temp_x = map_landmarks.landmark_list[k].x_f;
+				double temp_y = map_landmarks.landmark_list[k].y_f;
+				double distance = dist(pred_x, pred_y, temp_x, temp_y);
 
-		for (int j = 0; j < transformed_obs.size(); j++){
-			double trans_id = transformed_obs[j].id;
-			LandmarkObs pred_landmark;
-			for (int k = 0; k < predicted.size(); k++){
-				if (predicted[k].id == trans_id){
-					pred_landmark = predicted[k];
+				if ( distance < shortest_dist){
+					cout << "show me the distance: " << distance << endl;
+					// Associate the shortest distance landmark with the observation.
+					shortest_dist = distance;
+					land_x = temp_x;
+					land_y = temp_y;
 				}
 			}
 
-			double trans_x, trans_y, pred_x, pred_y, std_x, std_y;
-			long double w;
-			trans_x = transformed_obs[j].x;
-			trans_y = transformed_obs[j].y;
-			pred_x = pred_landmark.x;
-			pred_y = pred_landmark.y;
-			std_x = std_landmark[0];
-			std_y = std_landmark[1];
-			cout << "trans_x: " << trans_x << endl;
-			cout << "trans_y: " << trans_y << endl;
-			cout << "pred_x: " << pred_x << endl;
-			cout << "pred_y: " << pred_y << endl;
-			double x_diff = pred_x - trans_x;
-			double y_diff = pred_y - trans_y;
-			double nom = exp(-((x_diff*x_diff)/(2.0*std_x*std_x) + ((y_diff*y_diff)/(2.0*std_y*std_y))));
-			double denom = 2.0*M_PI*std_x*std_y;
-			// cout << "nom: " << nom << endl;
-			// cout << "denom: " << denom << endl; 
-			w = nom/denom;
+			// calculate the weight using the associated landmark and the observation.
+			double x_diff = pred_x - land_x;
+			double y_diff = pred_y - land_y;
+			double std_x = std_landmark[0];
+			double std_y = std_landmark[1];
+			double w = exp(-0.5*((x_diff * x_diff)/(std_x * std_x) + (y_diff * y_diff)/(std_y * std_y))) / (2.0*M_PI* std_x * std_y);
+			cout << "show me the pred_x: " << pred_x << endl;
+			cout << "show me the pred_y: " << pred_y << endl;
+			cout << "show me the land_x: " << land_x << endl;
+			cout << "show me the land_y: " << land_y << endl;
+			cout << "show me the weight: " << w << endl;
 			weight *= w;
-			// cout << "little weights: " << w << endl;
-
 
 		}
-		// cout << "weight: " << weight << endl;  
 
+		// update the new weights to each particle.
 		particles[i].weight = weight;
 		weights[i] = weight;
-
 	}
+
 
 
 }
@@ -248,10 +224,12 @@ void ParticleFilter::resample() {
 	//   http://en.cppreference.com/w/cpp/numeric/random/discrete_distribution
 
 	default_random_engine gen;
+	// generate the distribution based on the weights array.
 	discrete_distribution<int> distribution(weights.begin(), weights.end());
 
 	vector<Particle> resample_particles;
 
+	// resample particles based on the weight for each particle.
 	for (int i = 0; i < num_particles; i++)
 	{
 		resample_particles.push_back(particles[distribution(gen)]);
